@@ -9,6 +9,9 @@ on:
       variations:
         description: "The benchmark variations to run (build/build-cache/run are added via matrix include pairs)"
         default: '["clean", "node_modules", "cache", "cache+node_modules", "cache+lockfile", "cache+lockfile+node_modules", "ci", "ci+setup", "lockfile", "lockfile+node_modules", "registry-clean", "registry-lockfile", "add-singleton", "remove-singleton", "add-overlap", "remove-overlap"]'
+      registries:
+        description: "Comma-separated registries for registry-* variations"
+        default: "cloudsmith"
       binaries:
         description: "The binaries to run the benchmarks on"
         default: '"npm,yarn,berry,zpm,pnpm,vlt,bun,deno,aube,upm,nx,turbo,vp,node"'
@@ -95,6 +98,7 @@ jobs:
         env:
           IN_FIXTURES: ${{ inputs.fixtures || '' }}
           IN_VARIATIONS: ${{ inputs.variations || '' }}
+          IN_REGISTRIES: ${{ inputs.registries || '' }}
           IN_BINARIES: ${{ inputs.binaries || '' }}
           IN_WARMUP: ${{ inputs.warmup || '' }}
           IN_RUNS: ${{ inputs.runs || '' }}
@@ -106,6 +110,7 @@ jobs:
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             [[ "$IN_FIXTURES" == '["next", "astro", "vue", "svelte", "large", "babylon"]' ]] || partial=true
             [[ "$IN_VARIATIONS" == '["clean", "node_modules", "cache", "cache+node_modules", "cache+lockfile", "cache+lockfile+node_modules", "ci", "ci+setup", "lockfile", "lockfile+node_modules", "registry-clean", "registry-lockfile", "add-singleton", "remove-singleton", "add-overlap", "remove-overlap"]' ]] || partial=true
+            [[ "$IN_REGISTRIES" == 'cloudsmith' ]] || partial=true
             [[ "$IN_BINARIES" == '"npm,yarn,berry,zpm,pnpm,vlt,bun,deno,aube,upm,nx,turbo,vp,node"' ]] || partial=true
             [[ "$IN_WARMUP" == "2" ]] || partial=true
             [[ "$IN_RUNS" == "5" ]] || partial=true
@@ -141,6 +146,7 @@ jobs:
       # rc.21 is advertised by the canary channel but its Linux ARM64 npm binary is missing.
       BENCH_ZPM_VERSION: "6.0.0-rc.20"
       BENCH_INCLUDE: ${{ fromJson(inputs.binaries || '"npm,yarn,berry,zpm,pnpm,vlt,bun,deno,aube,upm,nx,turbo,vp,node"') }}
+      BENCH_INCLUDE_REGISTRY: ${{ inputs.registries || 'cloudsmith' }}
       BENCH_WARMUP: ${{ (github.event_name == 'push' && github.ref != 'refs/heads/main') && '1' || (inputs.warmup || '2') }}
       BENCH_RUNS: ${{ (github.event_name == 'push' && github.ref != 'refs/heads/main') && '1' || (inputs.runs || '5') }}
     steps:
@@ -158,13 +164,13 @@ jobs:
         run: |
           bash ./scripts/setup.sh
       - name: Configure AWS Credentials
-        if: startsWith(matrix.variation, 'registry-')
+        if: startsWith(matrix.variation, 'registry-') && contains(env.BENCH_INCLUDE_REGISTRY, 'aws')
         uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: us-east-1
       - name: Get CodeArtifact Token
-        if: startsWith(matrix.variation, 'registry-')
+        if: startsWith(matrix.variation, 'registry-') && contains(env.BENCH_INCLUDE_REGISTRY, 'aws')
         id: aws
         run: |
           CODEARTIFACT_AUTH_TOKEN=$(aws codeartifact get-authorization-token \
@@ -219,7 +225,8 @@ jobs:
         run: |
           ./suite/bench run \
             --fixtures="${{ matrix.fixture }}" \
-            --variation="${{ matrix.variation }}"
+            --variation="${{ matrix.variation }}" \
+            --registries="${BENCH_INCLUDE_REGISTRY}"
       - name: Upload Benchmark Results
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
@@ -262,7 +269,7 @@ jobs:
         # This must run before `bench process`, which rewrites exit codes in
         # place (dropping failed runs), so raw per-run failures are only
         # visible here.
-        if: github.ref == 'refs/heads/main' && needs.detect-changes.outputs.partial_run != 'true'
+        if: github.ref == 'refs/heads/main' && needs.detect-changes.outputs.partial_run != 'true' && contains(inputs.registries || 'cloudsmith', 'vlt')
         uses: actions/github-script@v9
         with:
           script: |
@@ -348,7 +355,7 @@ jobs:
         id: registry-check
         # Same gate as the deploy job: alert exactly when these results will
         # be published to the site.
-        if: github.ref == 'refs/heads/main' && needs.detect-changes.outputs.partial_run != 'true'
+        if: github.ref == 'refs/heads/main' && needs.detect-changes.outputs.partial_run != 'true' && contains(inputs.registries || 'cloudsmith', 'vlt')
         uses: actions/github-script@v9
         env:
           VLT_FAILURES: ${{ steps.registry-raw.outputs.vlt_failures }}
